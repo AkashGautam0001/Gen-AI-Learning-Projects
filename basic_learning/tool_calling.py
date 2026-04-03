@@ -24,7 +24,16 @@ def add(x, y):
     print("🔨 Tool Called: add", x, y)
     return x + y
 
-avaia
+avaiable_tools = {
+    "get_weather" : {
+        "fn" : get_weather,
+        "description" : "Takes a city name as an input and returns the current weather for the city"
+    },
+    "run_command":{
+        "fn":run_command,
+        "description" : "Takes a command as input"
+    }
+}
 
 system_prompt = """
 You are a helpful AI assistent who is specialized in resolving user query.
@@ -57,3 +66,40 @@ Example:
     Output: {{ "step": "observe", "output": "12 Degree Cel" }}
     Output: {{ "step": "output", "content": "The weather for new york seems to be 12 degrees." }}
 """
+
+messages = [
+    {"role" : "system", "content" : system_prompt}
+]
+
+while True:
+    print("============================================")
+    print("messages: ", messages)
+    user_query = input('> ')
+    messages.append({"role": "user", "content": user_query})
+
+    while True:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            response_format={"type": "json_object"},
+            messages=messages
+        )
+
+        parsed_output = json.loads(response.choices[0].message.content)
+        messages.append({"role": "assistant", "content": json.dumps(parsed_output)})
+
+        if parsed_output.get("step") == "plan":
+            continue
+
+        if parsed_output.get("step") == "action":
+            tool_name = parsed_output.get("function")
+            tool_input = parsed_output.get("input")
+
+            if avaiable_tools.get(tool_name, False) != False:
+                output = avaiable_tools[tool_name].get("fn")(tool_input)
+                messages.append({"role": "assistant", "content": json.dumps({"step": "observe", "output": output})})
+                continue
+        
+        if parsed_output.get("step") == "output":
+            break
+    
+    print("============================================")

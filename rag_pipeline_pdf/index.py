@@ -6,6 +6,7 @@ from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance, PointStruct
 import time
+import re
 
 # ---------------- LOGGING SETUP ----------------
 logging.basicConfig(
@@ -41,37 +42,47 @@ for i, page in enumerate(reader.pages):
 logging.info(f"Total text length: {len(text)}")
 
 # ---------------- CHUNKING ----------------
-def get_chunk_text(text, chunk_size=500, overlap=50):
+def get_chunk_text(text, chunk_size=800, overlap=50):
     logging.info("Chunking text...")
-    chunks = []
-    for i in range(0, len(text), chunk_size - overlap):
-        chunks.append(text[i:i+chunk_size])
-    logging.info(f"Total chunks created: {len(chunks)}")
-    return chunks
 
-chunks = get_chunk_text(text)
+    sentences = re.split(r'(?<=[.!?]) +', text)
+
+    chunks = []
+    current_chunk = ""
+
+    for sentence in sentences:
+        if len(current_chunk)+len(sentence) < chunk_size:
+            logging.info("Sentence if : "+sentence)
+            current_chunk += sentence + " "
+        else:
+            logging.info("Sentence else : "+sentence)
+            chunks.append(current_chunk.strip())
+            current_chunk = sentence + " "
+    
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    logging.info(f"Total chunks created: {len(chunks)}")
+
+    return chunks
+chunks = get_chunk_text(text, 800, 100)
 
 # ---------------- EMBEDDINGS ----------------
-def get_embeddings(text):
+def get_embeddings_batch(text_list):
     try:
         response = client.embeddings.create(
             model="text-embedding-3-small",
-            input=text
+            input=text_list
         )
-        return response.data[0].embedding
+        return [item.embedding for item in response.data]
     except Exception as e:
         logging.error(f"Embedding error: {e}")
-        return None
+        return []
 
 logging.info("Creating embeddings...")
 start_time = time.time()
 
-embeddings = []
-for i, chunk in enumerate(chunks):
-    logging.info(f"Creating embedding for chunk {i}")
-    emb = get_embeddings(chunk)
-    if emb:
-        embeddings.append(emb)
+embeddings = get_embeddings_batch(chunks)
 
 logging.info(f"Embeddings created in {time.time() - start_time:.2f} seconds")
 
@@ -97,7 +108,11 @@ for i, vector in enumerate(embeddings):
         PointStruct(
             id=i,
             vector=vector,
-            payload={"text": chunks[i]}
+            payload={
+                "text": chunks[i],
+                "source": "PDF-Guide-Node-Andrew-Mead-v3.pdf",
+                "chunk_id": i,
+            }
         )
     )
 
@@ -111,19 +126,57 @@ logging.info("Upload complete!")
 # ---------------- SEARCH ----------------
 def search(query):
     logging.info(f"Searching for query: {query}")
-    query_vector = get_embeddings(query)
+    query_vector = get_embeddings_batch([query])[0]
 
     hits = client_qdrant.query_points(
         collection_name="pdf_docs",
         query=query_vector,
-        limit=3
+        limit=5
     )
 
     logging.info(f"Search returned {len(hits.points)} results")
-    return hits
+    return "\n\n".join([hit.payload["text"] for hit in hits.points])
 
-# ---------------- RUN SEARCH ----------------
-context = search("What is this PDF about?")
-logging.info("Search finished")
+# ---------------- CHAT LOOP ----------------
+print("\nRAG Chat Ready! Type 'exit' to stop.\n")
 
-print(context)
+while True:
+    user_question = input("You: ")
+
+    if user_question.lower() == "exit":
+        print("Goodbye!")
+        break
+
+    # Retrieve context from Qdrant
+    context = search(user_question)
+
+    SYSTEM_PROMPT = f"""
+    You are a helpful AI assistant.
+    Answer the question ONLY using the provided context.
+    If the answer is not in the context, say: "Answer not found in document".
+
+    Context:
+    {context}
+
+    Question: {user_question}
+    Answer:
+    """
+
+    logging.info("Sending query to GPT...")
+
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that answers from provided PDF context only."},
+            {"role": "user", "content": SYSTEM_PROMPT}
+        ]
+    )
+
+    answer = response.choices[0].message.content
+
+    print("\nAI:", answer, "\n")
+
+    logging.info(f"User question: {user_question}")
+    logging.info(f"AI answer: {answer}")
+
+print(response.choices[0].message.content)

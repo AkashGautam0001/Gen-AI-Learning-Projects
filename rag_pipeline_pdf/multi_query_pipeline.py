@@ -165,6 +165,14 @@ def get_ai_response(openai_client, user_question, context):
     )
     return response.choices[0].message.content
 
+def clean_llm_output(text):
+    text = text.strip()
+
+    # remove ```python and ```
+    text = text.replace("```python", "").replace("```", "")
+
+    return text.strip()
+
 def generate_queries(openai_client, user_query):
     logging.info(f"Generating multiple queries for: {user_query}")
     prompt = f"""
@@ -181,9 +189,10 @@ def generate_queries(openai_client, user_query):
             {"role": "user", "content": prompt}
         ]
     )
-    logging.info(f"Queries raw response: {response}")
     try:
-        queries = ast.literal_eval(response.choices[0].message.content)
+        raw_output = response.choices[0].message.content
+        clean_output = clean_llm_output(raw_output)
+        queries = ast.literal_eval(clean_output)
         logging.info(f"Successfully parsed {len(queries)} queries")
     except Exception as e:
         logging.warning(f"Failed to parse queries, using original query: {e}")
@@ -228,7 +237,11 @@ def chat_loop(openai_client, qdrant_client, collection_name):
         print("\nAI:", answer, "\n")
         logging.info(f"User question: {user_question}")
         logging.info(f"AI answer: {answer}")
- 
+
+def check_collection_exist(qdrant_client, collection):
+    response = qdrant_client.collection_exists(collection_name=collection)
+    print(response)
+    return response
 # ---------------- MAIN ----------------
 def main():
     setup_logging()
@@ -241,8 +254,9 @@ def main():
     chunks = get_chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
     embeddings = create_embeddings(openai_client, chunks)
 
-    setup_collection(qdrant_client, COLLECTION_NAME, EMBEDDING_DIM)
-    upload_vectors(qdrant_client, COLLECTION_NAME, chunks, embeddings, PDF_PATH)
+    if not check_collection_exist(qdrant_client,COLLECTION_NAME):
+        setup_collection(qdrant_client, COLLECTION_NAME, EMBEDDING_DIM)
+        upload_vectors(qdrant_client, COLLECTION_NAME, chunks, embeddings, PDF_PATH)
 
     chat_loop(openai_client, qdrant_client, COLLECTION_NAME)
 

@@ -2,6 +2,7 @@ import os
 import logging
 import time
 import re
+import ast
 from dotenv import load_dotenv
 from pypdf import PdfReader
 from openai import OpenAI
@@ -134,7 +135,11 @@ def search(query, openai_client, qdrant_client, collection_name):
         limit=5
     )
     logging.info(f"Search returned {len(hits.points)} results")
-    return "\n\n".join([hit.payload["text"] for hit in hits.points])
+    return [{
+        "text": hit.payload["text"],
+        "score": hit.score,
+        "query": query
+    } for hit in hits.points]
 
 
 # ---------------- GPT RESPONSE ----------------
@@ -166,6 +171,9 @@ def generate_queries(openai_client, user_query):
     Generate 5 different search queries for the question:
     "{user_query}"
     Make them diverse and cover different perspectives.
+
+    Return ONLY a Python list.
+    Example: ["query1", "query2", "query3"]
     """
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
@@ -173,22 +181,28 @@ def generate_queries(openai_client, user_query):
             {"role": "user", "content": prompt}
         ]
     )
-    queries = response.choices[0].message.content.split("\n")
-    generated_queries = [q.strip("- ") for q in queries if q.strip()]
-    logging.info(f"Generated {len(generated_queries)} queries")
-    return generated_queries
+    logging.info(f"Queries raw response: {response}")
+    try:
+        queries = ast.literal_eval(response.choices[0].message.content)
+        logging.info(f"Successfully parsed {len(queries)} queries")
+    except Exception as e:
+        logging.warning(f"Failed to parse queries, using original query: {e}")
+        queries = [user_query]
+    return queries
 
-def deduplicate_contexts(contexts):
+
+def deduplicate_chunks(chunks):
+    logging.info(f"Deduplicating {len(chunks)} chunks...")
     seen = set()
     unique = []
-    for ctx in contexts:
-        if ctx not in seen:
-            seen.add(ctx)
-            unique.append(ctx)
+    for chunk in chunks:
+        if chunk["text"] not in seen:
+            seen.add(chunk["text"])
+            unique.append(chunk)
+    
+    logging.info(f"Deduplicated to {len(unique)} unique chunks")
     return unique
 
-
-# ---------------- CHAT LOOP ----------------
 def chat_loop(openai_client, qdrant_client, collection_name):
     print("\nRAG Chat Ready! Type 'exit' to stop.\n")
     while True:
@@ -200,20 +214,21 @@ def chat_loop(openai_client, qdrant_client, collection_name):
         queries = generate_queries(openai_client, user_question)
         logging.info(f"Generated {len(queries)} queries from user question")
 
-        all_contexts = []
+        all_chunks = []
         for query in queries:
-            context = search(query, openai_client, qdrant_client, collection_name)
-            logging.info(f"Retrieved context for query: {query}")
-            all_contexts.append(context)
+            results = search(query, openai_client, qdrant_client, collection_name)
+            logging.info(f"Retrieved {len(results)} chunks for query: {query}")
+            all_chunks.extend(results)
 
-        unique_contexts = deduplicate_contexts(all_contexts)
-        combined_context = "\n\n".join(unique_contexts)
+        unique_chunks = deduplicate_chunks(all_chunks)
+        combined_context = "\n\n".join([c["text"] for c in unique_chunks])
+        logging.info(f"Combined context length: {len(combined_context)} characters")
         answer = get_ai_response(openai_client, user_question, combined_context)
 
         print("\nAI:", answer, "\n")
         logging.info(f"User question: {user_question}")
         logging.info(f"AI answer: {answer}")
-
+ 
 # ---------------- MAIN ----------------
 def main():
     setup_logging()

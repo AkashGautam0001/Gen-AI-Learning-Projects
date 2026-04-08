@@ -250,16 +250,25 @@ def main():
     openai_client = load_openai_client()
     qdrant_client = load_qdrant_client()
 
-    text = read_pdf(PDF_PATH)
-    chunks = get_chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
-    embeddings = create_embeddings(openai_client, chunks)
+    RUN_INGESTION = False
 
-    if not check_collection_exist(qdrant_client,COLLECTION_NAME):
-        setup_collection(qdrant_client, COLLECTION_NAME, EMBEDDING_DIM)
+    logging.info(f"Mode: {'INGESTION' if RUN_INGESTION else 'CHAT'}")
+
+    if RUN_INGESTION:
+        text = read_pdf(PDF_PATH)
+        chunks = get_chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
+        embeddings = create_embeddings(openai_client, chunks)
+
+        if not check_collection_exist(qdrant_client, COLLECTION_NAME):
+            setup_collection(qdrant_client, COLLECTION_NAME, EMBEDDING_DIM)
+
         upload_vectors(qdrant_client, COLLECTION_NAME, chunks, embeddings, PDF_PATH)
 
-    chat_loop(openai_client, qdrant_client, COLLECTION_NAME)
+    else:
+        if not check_collection_exist(qdrant_client, COLLECTION_NAME):
+            raise Exception("Collection not found. Run ingestion first.")
 
+    chat_loop(openai_client, qdrant_client, COLLECTION_NAME)
 
 if __name__ == "__main__":
     main()

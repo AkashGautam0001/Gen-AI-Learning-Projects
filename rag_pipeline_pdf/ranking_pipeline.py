@@ -231,7 +231,12 @@ def rrf_fusion(result_per_query, k=60):
                 }
             
             rrf_score = 1 / (rank + 1 + k) 
-            scores[key]["score"] += rrf_score
+
+            # Use the original semantic similarity score from Qdrant if available
+            semantic_similarity_score = chunk.get("score", 0)
+
+            scores[key]["score"] = scores[key]["score"] + rrf_score + semantic_similarity_score
+            
             logging.debug(f"  Updated score: {scores[key]['score']:.4f}")
     
     result = list(scores.values())
